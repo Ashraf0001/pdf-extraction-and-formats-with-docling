@@ -1,0 +1,117 @@
+name: Automated PDF Batch Processing
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:  # Allow manual triggering
+  push:
+    branches: [ main ]
+    paths:
+      - 'input_pdfs/**'
+
+jobs:
+  batch-process:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y openjdk-11-jdk
+        sudo apt-get install -y ghostscript
+        sudo apt-get install -y tesseract-ocr
+        
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Create input/output directories
+      run: |
+        mkdir -p input_pdfs
+        mkdir -p batch_output
+        mkdir -p processed_pdfs
+        
+    - name: Run batch processing
+      run: |
+        python batch_pdf_processor.py input_pdfs batch_output --workers 2
+      env:
+        PYTHONPATH: ${{ github.workspace }}
+        
+    - name: Generate processing report
+      run: |
+        python -c "
+        import json
+        import os
+        from datetime import datetime
+        
+        # Read batch summary if it exists
+        summary_file = 'batch_output/batch_summary.json'
+        if os.path.exists(summary_file):
+            with open(summary_file, 'r') as f:
+                summary = json.load(f)
+            
+            # Create markdown report
+            report = f'''# Batch Processing Report - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            
+            ## Summary
+            - **Total Files**: {summary.get('total_files', 0)}
+            - **Successful**: {summary.get('successful_files', 0)}
+            - **Failed**: {summary.get('failed_files', 0)}
+            - **Total Tables Found**: {summary.get('total_tables_found', 0)}
+            - **Processing Time**: {summary.get('total_processing_time', 0):.2f} seconds
+            
+            ## File Results
+            '''
+            
+            for result in summary.get('file_results', []):
+                if result.get('status') == 'success':
+                    report += f'- ✅ {result.get('filename')}: {result.get('total_tables', 0)} tables, {result.get('processing_time_seconds', 0):.2f}s\n'
+                else:
+                    report += f'- ❌ {result.get('filename')}: {result.get('error', 'Unknown error')}\n'
+            
+            with open('batch_output/processing_report.md', 'w') as f:
+                f.write(report)
+        else:
+            with open('batch_output/processing_report.md', 'w') as f:
+                f.write('# No PDFs to Process\nNo PDF files found in input_pdfs directory.')
+        "
+        
+    - name: Move processed PDFs
+      run: |
+        if [ -d "input_pdfs" ] && [ "$(ls -A input_pdfs)" ]; then
+          mv input_pdfs/* processed_pdfs/ 2>/dev/null || true
+        fi
+        
+    - name: Commit and push results
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        # Add all changes
+        git add batch_output/
+        git add processed_pdfs/
+        
+        # Commit with timestamp
+        git commit -m "Automated batch processing - $(date '+%Y-%m-%d %H:%M:%S')" || echo "No changes to commit"
+        
+        # Push to repository
+        git push origin main || echo "No changes to push"
+        
+    - name: Upload results as artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: batch-processing-results
+        path: |
+          batch_output/
+          processed_pdfs/
+        retention-days: 30 
