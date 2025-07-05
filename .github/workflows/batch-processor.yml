@@ -3,7 +3,7 @@ name: Automated PDF Batch Processing
 on:
   schedule:
     # Run every 6 hours
-    - cron: '0 */6 * * *'
+    # cron: '0 */6 * * *'
   workflow_dispatch:  # Allow manual triggering
   push:
     branches: [ main ]
